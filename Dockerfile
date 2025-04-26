@@ -7,6 +7,6 @@ RUN npm install
 
 COPY public ./public
 
-EXPOSE 3000
+EXPOSE 5001
 
 CMD ["npm", "start"]
