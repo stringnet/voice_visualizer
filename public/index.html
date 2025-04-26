@@ -2,16 +2,84 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Espectro de Voz en Tiempo Real</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio Visualizer</title>
   <style>
-    canvas { background: #000; display: block; margin: 0 auto; }
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      width: 100%;
+      height: 50%;
+      background: #111;
+    }
+    audio {
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
-  <h2 style="text-align:center;">Espectro de Audio en Vivo</h2>
-  <canvas id="spectrum" width="800" height="200"></canvas>
+  <canvas id="visualizer"></canvas>
+  <audio id="audio" controls autoplay></audio>
 
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script src="app.js"></script>
+  <script>
+    const audio = document.getElementById('audio');
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+
+    audio.src = "https://streamer.scanmee.io/stream";
+    audio.crossOrigin = "anonymous";
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaElementSource(audio);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    source.connect(analyser);
+    analyser.connect(audioContext.destination);
+
+    function draw() {
+      requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(dataArray);
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#0f0';
+      ctx.beginPath();
+
+      const sliceWidth = canvas.width / bufferLength;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = v * canvas.height / 2;
+
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+        x += sliceWidth;
+      }
+
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+    }
+
+    draw();
+  </script>
 </body>
 </html>
