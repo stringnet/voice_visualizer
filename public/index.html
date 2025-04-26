@@ -1,85 +1,96 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Audio Visualizer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visualizer 360 - Orgánico</title>
   <style>
-    body {
+    html, body {
       margin: 0;
-      background: #000;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
+      padding: 0;
       overflow: hidden;
-      color: #fff;
-      font-family: Arial, sans-serif;
+      height: 100%;
+      background: radial-gradient(circle at center, #d8c7ff 0%, #5c00b5 100%);
     }
     canvas {
-      width: 100%;
-      height: 50%;
-      background: #111;
-    }
-    audio {
-      margin-top: 20px;
+      display: block;
     }
   </style>
 </head>
 <body>
-  <canvas id="visualizer"></canvas>
-  <audio id="audio" controls autoplay></audio>
+<canvas id="visualizer"></canvas>
+<audio id="audio" controls autoplay style="display: none;"></audio>
 
-  <script>
-    const audio = document.getElementById('audio');
-    const canvas = document.getElementById('visualizer');
-    const ctx = canvas.getContext('2d');
+<script>
+const canvas = document.getElementById('visualizer');
+const ctx = canvas.getContext('2d');
+const audio = document.getElementById('audio');
 
-    audio.src = "https://streamer.scanmee.io/stream";
-    audio.crossOrigin = "anonymous";
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
 
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioContext.createMediaElementSource(audio);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+const analyser = audioContext.createAnalyser();
+analyser.fftSize = 512;
+const bufferLength = analyser.frequencyBinCount;
+const dataArray = new Uint8Array(bufferLength);
 
-    source.connect(analyser);
-    analyser.connect(audioContext.destination);
+const source = audioContext.createMediaElementSource(audio);
+source.connect(analyser);
+analyser.connect(audioContext.destination);
 
-    function draw() {
-      requestAnimationFrame(draw);
-      analyser.getByteTimeDomainData(dataArray);
+audio.src = "https://streamer.scanmee.io/stream";
+audio.crossOrigin = "anonymous";
 
-      ctx.fillStyle = '#111';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+audio.onplay = () => {
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+};
 
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#0f0';
-      ctx.beginPath();
+function draw() {
+  requestAnimationFrame(draw);
+  analyser.getByteFrequencyData(dataArray);
 
-      const sliceWidth = canvas.width / bufferLength;
-      let x = 0;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      for (let i = 0; i < bufferLength; i++) {
-        const v = dataArray[i] / 128.0;
-        const y = v * canvas.height / 2;
+  ctx.save();
+  ctx.translate(canvas.width/2, canvas.height/2);
 
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-        x += sliceWidth;
-      }
+  const radius = Math.min(canvas.width, canvas.height) / 4;
+  const points = 64;
+  const slice = Math.PI * 2 / points;
 
-      ctx.lineTo(canvas.width, canvas.height / 2);
-      ctx.stroke();
+  ctx.beginPath();
+
+  for (let i = 0; i <= points; i++) {
+    const value = dataArray[i % bufferLength] / 255;
+    const r = radius + value * 100;
+    const angle = slice * i;
+
+    const x = r * Math.cos(angle);
+    const y = r * Math.sin(angle);
+
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
     }
+  }
 
-    draw();
-  </script>
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+draw();
+</script>
 </body>
 </html>
