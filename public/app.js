@@ -1,4 +1,4 @@
-const socket = io('https://voicevisualizer.scanmee.io:5001'); // Cambiar por el dominio real
+const socket = io('https://streamer.scanmee.io'); // Cambiar por el dominio real
 
 let audioContext = new (window.AudioContext || window.webkitAudioContext)();
 let analyser = audioContext.createAnalyser();
