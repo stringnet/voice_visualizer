@@ -1,96 +1,59 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Visualizer 360 - Orgánico</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      height: 100%;
-      background: radial-gradient(circle at center, #d8c7ff 0%, #5c00b5 100%);
-    }
-    canvas {
-      display: block;
-    }
-  </style>
+  <title>Voice Visualizer</title>
 </head>
-<body>
-<canvas id="visualizer"></canvas>
-<audio id="audio" controls autoplay style="display: none;"></audio>
+<body style="background-color: black; display: flex; align-items: center; justify-content: center; height: 100vh;">
 
-<script>
-const canvas = document.getElementById('visualizer');
-const ctx = canvas.getContext('2d');
-const audio = document.getElementById('audio');
+  <audio id="audio" autoplay></audio>
+  <canvas id="visualizer" width="600" height="300"></canvas>
 
-function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resize);
-resize();
+  <script>
+    const audio = document.getElementById('audio');
+    audio.src = 'https://streamer.scanmee.io/stream';
+    audio.crossOrigin = "anonymous";
 
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-const analyser = audioContext.createAnalyser();
-analyser.fftSize = 512;
-const bufferLength = analyser.frequencyBinCount;
-const dataArray = new Uint8Array(bufferLength);
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
 
-const source = audioContext.createMediaElementSource(audio);
-source.connect(analyser);
-analyser.connect(audioContext.destination);
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioCtx.createAnalyser();
+    const source = audioCtx.createMediaElementSource(audio);
+    source.connect(analyser);
+    analyser.connect(audioCtx.destination);
 
-audio.src = "https://streamer.scanmee.io/stream";
-audio.crossOrigin = "anonymous";
+    analyser.fftSize = 256;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
 
-audio.onplay = () => {
-  if (audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
-};
+    function draw() {
+      requestAnimationFrame(draw);
 
-function draw() {
-  requestAnimationFrame(draw);
-  analyser.getByteFrequencyData(dataArray);
+      analyser.getByteFrequencyData(dataArray);
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.save();
-  ctx.translate(canvas.width/2, canvas.height/2);
+      const barWidth = (canvas.width / bufferLength) * 2.5;
+      let barHeight;
+      let x = 0;
 
-  const radius = Math.min(canvas.width, canvas.height) / 4;
-  const points = 64;
-  const slice = Math.PI * 2 / points;
+      for (let i = 0; i < bufferLength; i++) {
+        barHeight = dataArray[i];
 
-  ctx.beginPath();
+        ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,150)';
+        ctx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight / 2);
 
-  for (let i = 0; i <= points; i++) {
-    const value = dataArray[i % bufferLength] / 255;
-    const r = radius + value * 100;
-    const angle = slice * i;
-
-    const x = r * Math.cos(angle);
-    const y = r * Math.sin(angle);
-
-    if (i === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
+        x += barWidth + 1;
+      }
     }
-  }
 
-  ctx.closePath();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-  ctx.lineWidth = 3;
-  ctx.stroke();
+    audio.onplay = () => {
+      audioCtx.resume();
+      draw();
+    };
+  </script>
 
-  ctx.restore();
-}
-
-draw();
-</script>
 </body>
 </html>
