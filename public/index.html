@@ -1,59 +1,118 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Voice Visualizer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magitek World Visualizer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #5f27cd, #d0c3fc);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+    </style>
 </head>
-<body style="background-color: black; display: flex; align-items: center; justify-content: center; height: 100vh;">
+<body>
+    <canvas id="visualizer"></canvas>
 
-  <audio id="audio" autoplay></audio>
-  <canvas id="visualizer" width="600" height="300"></canvas>
+    <script>
+        const canvas = document.getElementById('visualizer');
+        const ctx = canvas.getContext('2d');
 
-  <script>
-    const audio = document.getElementById('audio');
-    audio.src = 'https://streamer.scanmee.io/stream';
-    audio.crossOrigin = "anonymous";
+        let audioContext;
+        let analyser;
+        let source;
+        let dataArray;
 
-    const canvas = document.getElementById('visualizer');
-    const ctx = canvas.getContext('2d');
+        async function setupAudio() {
+            try {
+                const streamUrl = 'https://streamer.scanmee.io/stream';
+                const response = await fetch(streamUrl);
 
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioCtx.createAnalyser();
-    const source = audioCtx.createMediaElementSource(audio);
-    source.connect(analyser);
-    analyser.connect(audioCtx.destination);
+                if (!response.ok) {
+                    console.error('Error al conectar al stream:', response.statusText);
+                    return;
+                }
 
-    analyser.fftSize = 256;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+                const arrayBuffer = await response.arrayBuffer();
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-    function draw() {
-      requestAnimationFrame(draw);
+                source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
 
-      analyser.getByteFrequencyData(dataArray);
+                analyser = audioContext.createAnalyser();
+                source.connect(analyser);
+                analyser.connect(audioContext.destination);
 
-      ctx.fillStyle = 'black';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+                analyser.fftSize = 256;
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
 
-      const barWidth = (canvas.width / bufferLength) * 2.5;
-      let barHeight;
-      let x = 0;
+                source.start();
+                draw();
+            } catch (error) {
+                console.error('Error inicializando audio:', error);
+            }
+        }
 
-      for (let i = 0; i < bufferLength; i++) {
-        barHeight = dataArray[i];
+        function draw() {
+            requestAnimationFrame(draw);
 
-        ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,150)';
-        ctx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight / 2);
+            if (!analyser) return;
 
-        x += barWidth + 1;
-      }
-    }
+            analyser.getByteFrequencyData(dataArray);
 
-    audio.onplay = () => {
-      audioCtx.resume();
-      draw();
-    };
-  </script>
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(centerX, centerY) / 2;
+
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 5;
+            ctx.stroke();
+
+            ctx.beginPath();
+            for (let i = 0; i < dataArray.length; i++) {
+                const angle = (i / dataArray.length) * Math.PI * 2;
+                const distance = radius + dataArray[i] / 4;
+                const x = centerX + distance * Math.cos(angle);
+                const y = centerY + distance * Math.sin(angle);
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.closePath();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        setupAudio();
+    </script>
 </body>
 </html>
