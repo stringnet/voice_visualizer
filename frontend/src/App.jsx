@@ -8,7 +8,7 @@ function App() {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    const socket = new WebSocket("wss://apivisualizador.scanmee.io/ws");
+    const socket = new WebSocket("wss://backvisualizador.scanmee.io/ws");
     socketRef.current = socket;
 
     socket.onmessage = (event) => {
