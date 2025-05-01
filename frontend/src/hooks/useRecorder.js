@@ -5,7 +5,7 @@ function MyComponent() {
     const formData = new FormData();
     formData.append('audio', blob);
 
-    fetch('https://apivisualizador.scanmee.io/audio', {
+    fetch('https://backvisualizador.scanmee.io/audio', {
       method: 'POST',
       body: formData,
     })
