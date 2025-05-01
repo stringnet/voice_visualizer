@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
 let backendWsUrl = import.meta.env.VITE_BACKEND_WS;
 if (!backendWsUrl) {
-  backendWsUrl = 'wss://apivisualizador.scanmee.io/ws';
+  backendWsUrl = 'wss://backvisualizador.scanmee.io/ws';
 }
 
 function InputHandler() {
