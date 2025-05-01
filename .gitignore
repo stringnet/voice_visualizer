@@ -1,0 +1,7 @@
+.env
+knowledge.db
+node_modules/
+build/
+dist/
+__pycache__/
+*.pyc

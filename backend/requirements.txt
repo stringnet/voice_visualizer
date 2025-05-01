@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+gunicorn
+openai==1.17.0
+httpx==0.24.0
+python-dotenv
+aiofiles
+aiohttp
