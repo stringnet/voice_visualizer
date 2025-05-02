@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 import websockets
 import asyncio
@@ -9,9 +9,7 @@ import tempfile
 
 app = FastAPI()
 
-# API Key de OpenAI desde variable de entorno
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
 
 @app.post("/ws-message")
@@ -31,19 +29,19 @@ async def send_ws_message(request: Request):
 
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    allowed_types = [
-        "audio/webm", "audio/mpeg", "audio/mp3", "audio/wav",
-        "audio/ogg", "audio/x-m4a", "video/mp4"
-    ]
-    
-    if audio.content_type not in allowed_types:
+    filename = audio.filename.lower()
+    valid_extensions = (".mp3", ".webm", ".wav", ".m4a", ".ogg", ".mp4", ".mpeg")
+
+    if not filename.endswith(valid_extensions):
         return JSONResponse(
-            content={"error": f"Tipo de archivo no soportado: {audio.content_type}"},
+            content={"error": f"Extensión no soportada: {filename}"},
             status_code=400
         )
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as tmp:
+        suffix = os.path.splitext(filename)[1] or ".mp3"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await audio.read())
             tmp_path = tmp.name
 
