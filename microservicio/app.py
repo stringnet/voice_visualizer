@@ -8,8 +8,11 @@ import tempfile
 from openai import OpenAI
 
 app = FastAPI()
-client = OpenAI()
+
+# Cliente OpenAI con API Key desde variable de entorno
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
+
 
 @app.post("/ws-message")
 async def send_ws_message(request: Request):
@@ -25,6 +28,7 @@ async def send_ws_message(request: Request):
         return {"status": "enviado", "mensaje": text}
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
