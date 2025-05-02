@@ -3,13 +3,12 @@ from fastapi.responses import JSONResponse
 import websockets
 import asyncio
 import json
-import openai
 import os
 import tempfile
+from openai import OpenAI
 
 app = FastAPI()
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI()
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
 
 @app.post("/ws-message")
@@ -46,11 +45,14 @@ async def transcribe_audio(audio: UploadFile = File(...)):
             tmp_path = tmp.name
 
         with open(tmp_path, "rb") as f:
-            transcript = openai.Audio.transcribe("whisper-1", f)
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f
+            )
 
         return JSONResponse(content={
             "status": "ok",
-            "transcripcion": transcript["text"]
+            "transcripcion": transcription.text
         })
 
     except Exception as e:
