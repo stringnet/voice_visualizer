@@ -5,8 +5,8 @@ WORKDIR /app
 # Copiar tu archivo principal
 COPY app.py /app
 
-# Instalar todas las dependencias necesarias, incluyendo OpenAI
-RUN pip install fastapi websockets uvicorn openai python-multipart
+# Instalar las dependencias, especificando versión compatible de OpenAI
+RUN pip install fastapi websockets uvicorn openai==1.17.0 python-multipart
 
 EXPOSE 3001
 
