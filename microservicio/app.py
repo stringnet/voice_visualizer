@@ -8,8 +8,8 @@ import tempfile
 
 app = FastAPI()
 
-# No usar proxies ni argumentos adicionales
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Solución directa al error del parámetro 'proxies'
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), http_client=None)
 
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
 
