@@ -9,8 +9,8 @@ import tempfile
 
 app = FastAPI()
 
-# Configura tu API Key de OpenAI aquí o con una variable de entorno
-openai.api_key = os.getenv("OPENAI_API_KEY")  # Puedes poner directamente el string para pruebas
+# API Key de OpenAI desde variable de entorno
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
 
@@ -31,16 +31,22 @@ async def send_ws_message(request: Request):
 
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    if audio.content_type not in ["audio/webm", "audio/mpeg", "audio/mp3", "audio/wav"]:
-        return JSONResponse(content={"error": "Formato de audio no soportado"}, status_code=400)
+    allowed_types = [
+        "audio/webm", "audio/mpeg", "audio/mp3", "audio/wav",
+        "audio/ogg", "audio/x-m4a", "video/mp4"
+    ]
+    
+    if audio.content_type not in allowed_types:
+        return JSONResponse(
+            content={"error": f"Tipo de archivo no soportado: {audio.content_type}"},
+            status_code=400
+        )
 
     try:
-        # Guardar archivo temporalmente
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as tmp:
             tmp.write(await audio.read())
             tmp_path = tmp.name
 
-        # Llamar a Whisper API de OpenAI
         with open(tmp_path, "rb") as f:
             transcript = openai.Audio.transcribe("whisper-1", f)
 
