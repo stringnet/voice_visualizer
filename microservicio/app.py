@@ -1,19 +1,17 @@
-from fastapi import FastAPI, Request, UploadFile, File
-import websockets
-import asyncio
-import json
+# app.py
 import os
-import tempfile
+from fastapi import FastAPI, Request, UploadFile, File
 from openai import OpenAI
-from fastapi.responses import JSONResponse
+import websockets
+import json
+import tempfile
 
 app = FastAPI()
 
-# Inicializar cliente OpenAI con API Key desde variable de entorno
+# No usar proxies ni argumentos adicionales
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
-
 
 @app.post("/ws-message")
 async def send_ws_message(request: Request):
@@ -30,21 +28,22 @@ async def send_ws_message(request: Request):
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
     try:
-        suffix = os.path.splitext(audio.filename)[-1] or ".webm"
+        # Guardar el archivo temporalmente
+        suffix = os.path.splitext(audio.filename)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await audio.read())
             tmp_path = tmp.name
 
+        # Transcribir usando Whisper
         with open(tmp_path, "rb") as f:
             transcription = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f
             )
-        os.remove(tmp_path)
-        return {"transcripcion": transcription.text}
+
+        return {"transcription": transcription.text}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return {"error": str(e)}
