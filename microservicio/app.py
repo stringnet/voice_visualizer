@@ -1,3 +1,4 @@
+# app.py
 import os
 from fastapi import FastAPI, Request, UploadFile, File
 import openai
@@ -7,7 +8,7 @@ import tempfile
 
 app = FastAPI()
 
-# Configura la API Key de OpenAI (sin crear instancia del cliente)
+# Configurar clave directamente
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
@@ -30,6 +31,7 @@ async def send_ws_message(request: Request):
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
     try:
+        # Guardar el archivo de audio temporalmente
         suffix = os.path.splitext(audio.filename)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await audio.read())
