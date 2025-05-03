@@ -1,15 +1,14 @@
-# app.py
 import os
 from fastapi import FastAPI, Request, UploadFile, File
-from openai import OpenAI
+import openai
 import websockets
 import json
 import tempfile
 
 app = FastAPI()
 
-# Solución directa al error del parámetro 'proxies'
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), http_client=None)
+# Configura la API Key de OpenAI (sin crear instancia del cliente)
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 WEBSOCKET_BACKEND_URL = "wss://backvisualizador.scanmee.io/ws"
 
@@ -31,15 +30,13 @@ async def send_ws_message(request: Request):
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
     try:
-        # Guardar el archivo temporalmente
         suffix = os.path.splitext(audio.filename)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await audio.read())
             tmp_path = tmp.name
 
-        # Transcribir usando Whisper
         with open(tmp_path, "rb") as f:
-            transcription = client.audio.transcriptions.create(
+            transcription = openai.audio.transcriptions.create(
                 model="whisper-1",
                 file=f
             )
