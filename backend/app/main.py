@@ -1,8 +1,7 @@
-# main.py (Modificado - v4)
+# main.py (Modificado - v5)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-# Importar WebSocketState
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocketState # Necesario para el chequeo
 from fastapi.middleware.cors import CORSMiddleware
 # ... (otros imports igual que antes) ...
 from ws_manager import ConnectionManager
@@ -16,7 +15,8 @@ app.add_middleware(
     CORSMiddleware, # ... (configuración CORS igual) ...
 )
 manager = ConnectionManager()
-# ... (otras inicializaciones igual) ...
+km = KnowledgeManager()
+tts = OpenAITTS()
 
 # ... (endpoints HTTP igual que antes) ...
 
@@ -24,62 +24,87 @@ manager = ConnectionManager()
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client_host = "desconocido"
-    connection_valid = False # Flag para saber si se aceptó
+    connection_valid = False
     try:
         await manager.connect(websocket)
-        connection_valid = True # Se aceptó correctamente
+        connection_valid = True
         client_host = websocket.client.host if websocket.client else "desconocido"
         logger.info(f"Cliente conectado: {client_host}")
 
         while True:
-            # --- *** NUEVA VERIFICACIÓN AQUÍ *** ---
-            # Antes de intentar recibir, verificar si el cliente sigue conectado.
-            # Esto debería prevenir el error en receive_json para conexiones cerradas.
-            if websocket.client_state == WebSocketState.DISCONNECTED:
-                logger.warning(f"Detectada desconexión de {client_host} antes de recibir. Saliendo del bucle.")
-                break # Salir del bucle while True si ya está desconectado
-            # --- *** FIN DE LA VERIFICACIÓN *** ---
+            data = None # Inicializar data a None en cada iteración
+            try:
+                 # --- *** FIX PARA RuntimeError: Verificar estado ANTES de recibir *** ---
+                 # Si ya está desconectado aquí, no tiene sentido esperar mensaje.
+                 # NOTA: client_state puede no ser 100% fiable inmediatamente después
+                 # del cierre si no hubo error, por eso el except es importante también.
+                 if websocket.client_state == WebSocketState.DISCONNECTED:
+                     logger.warning(f"Detectada desconexión de {client_host} al inicio del bucle.")
+                     break # Salir del bucle while True
 
-            logger.debug(f"Esperando mensaje de {client_host}...") # Log útil para depurar
-            data = await websocket.receive_json() # Intentar recibir
-            user_text = data.get("text")
+                 logger.debug(f"Esperando mensaje de {client_host}...")
+                 data = await websocket.receive_json() # Intentar recibir
 
-            if user_text:
-                logger.info(f"Texto recibido de {client_host}: {user_text}")
-                try:
-                    # ... (Procesamiento LLM/TTS y Broadcasts vía manager igual que antes) ...
-                    # ... (generar respuesta, audio_data) ...
-                    if audio_data:
-                         logger.info(f"Enviando audio a todos ({manager.get_connection_count()} cliente(s)) por solicitud de {client_host}...")
-                         await manager.broadcast_bytes(audio_data)
-                         await manager.broadcast_text("[✔] Audio generado y enviado correctamente.")
-                         await send_to_n8n(user_text)
-                    else:
-                         logger.warning(f"Audio vacío generado por TTS para solicitud de {client_host}.")
-                         await manager.broadcast_text("[ERROR] Audio generado está vacío.")
+            except WebSocketDisconnect:
+                # El cliente desconectó limpiamente MIENTRAS esperábamos en receive_json
+                logger.info(f"Desconexión detectada para {client_host} durante receive_json.")
+                break # Salir del bucle while True
 
-                except Exception as e_inner:
-                    error_msg = f"[❌] Error procesando texto '{user_text[:30]}...' para {client_host}: {type(e_inner).__name__}"
-                    logger.error(error_msg, exc_info=True)
-                    await manager.broadcast_text(error_msg) # Notificar a los demás clientes
-                    # No salimos del bucle aquí, el cliente podría seguir conectado y enviar más
+            # Si llegamos aquí sin 'break', recibimos datos
+            if data:
+                user_text = data.get("text")
+                if user_text:
+                    logger.info(f"Texto recibido de {client_host}: {user_text}")
+                    # --- *** FIX PARA NameError: Inicializar audio_data *** ---
+                    audio_data = None # Asegura que la variable exista
+                    try:
+                        # --- Procesamiento IA y TTS ---
+                        context = km.get_knowledge()
+                        system_prompt = f"Eres {context['rol']}. Usa el siguiente conocimiento para responder: {context['conocimientos']}"
+                        respuesta = await generate_response_with_knowledge(system_prompt, user_text)
+                        logger.info(f"Respuesta LLM generada para {client_host}: {respuesta[:50]}...")
+                        tts_response = await tts.synthesize_speech(respuesta)
+                        # Comprobar si tts_response es válido antes de leer
+                        if tts_response:
+                             audio_data = await tts_response.aread() # Asignar aquí
+                             logger.info(f"Audio TTS generado para {client_host}: {len(audio_data)} bytes")
+                        else:
+                             logger.error(f"TTS no devolvió respuesta válida para {client_host}")
+                             audio_data = None # Asegurarse que sigue siendo None
 
-            else:
-                 logger.warning(f"Mensaje JSON recibido de {client_host} sin clave 'text': {data}")
+                        # --- Envío de Respuesta vía Broadcast ---
+                        if audio_data:
+                            logger.info(f"Enviando audio a todos ({manager.get_connection_count()} cliente(s)) por solicitud de {client_host}...")
+                            await manager.broadcast_bytes(audio_data)
+                            await manager.broadcast_text("[✔] Audio generado y enviado correctamente.")
+                            await send_to_n8n(user_text)
+                        else:
+                            # Este caso ahora cubre explícitamente el fallo de TTS también
+                            logger.warning(f"No se generó audio válido (TTS vacío o error previo) para solicitud de {client_host}.")
+                            await manager.broadcast_text("[ERROR] No se pudo generar audio.")
 
-    except WebSocketDisconnect:
-        logger.info(f"Cliente desconectado limpiamente: {client_host}")
-        # El finally se encarga del manager.disconnect
+                    except Exception as e_inner:
+                        # Error DURANTE el procesamiento IA/TTS (ahora audio_data será None si falló antes)
+                        error_msg = f"[❌] Error procesando texto '{user_text[:30]}...': {type(e_inner).__name__}"
+                        logger.error(error_msg, exc_info=True)
+                        await manager.broadcast_text(error_msg)
+
+                else: # Si data no tiene la clave 'text'
+                     logger.warning(f"Mensaje JSON recibido de {client_host} sin clave 'text': {data}")
+            # else: Si data es None (podría pasar si receive_json devuelve None por alguna razón?)
+            #     logger.warning(f"receive_json devolvió None para {client_host}")
+            #     await asyncio.sleep(0.01) # Evitar bucle cerrado si algo va mal
 
     except Exception as e_outer:
-        # Errores inesperados fuera del procesamiento de texto (ej: al aceptar conexión, parsear JSON inicial)
+        # Errores inesperados fuera del bucle principal o al aceptar conexión
+        # El RuntimeError por receive_json en conexión cerrada debería ser capturado
+        # por el except WebSocketDisconnect ahora.
         error_msg_outer = f"Error grave en WebSocket para {client_host}: {type(e_outer).__name__}"
         logger.error(error_msg_outer, exc_info=True)
-        # El finally se encarga del manager.disconnect
 
     finally:
-        # Asegurarse de desconectar del manager si la conexión fue válida alguna vez
-        if connection_valid:
+        # Limpieza final: asegurar desconexión del manager
+        if connection_valid: # Solo si la conexión se aceptó alguna vez
              logger.info(f"Limpiando conexión en finally para: {client_host}")
              manager.disconnect(websocket)
         else:
