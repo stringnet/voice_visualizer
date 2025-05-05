@@ -1,17 +1,17 @@
-# main.py (Modificado)
+# main.py (Modificado - v3)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import HTTPException
+from starlette.websockets import WebSocketState # Importar para chequear estado si fuera necesario
 from utils.tts_openai import OpenAITTS
 from utils.llm_openai import generate_response_with_knowledge
-# Asumimos que ws_manager.py define ConnectionManager
-# y que ConnectionManager tiene métodos broadcast_bytes y broadcast_text
+# Asumimos que ws_manager.py tiene ConnectionManager con broadcast_bytes/text
 from ws_manager import ConnectionManager
 from knowledge_manager import KnowledgeManager, secure_update_knowledge, secure_reset_knowledge
 from n8n_webhook import send_to_n8n
 import os
-import logging # Añadir logging
+import logging
 
 app = FastAPI()
 
@@ -53,138 +53,98 @@ async def reset_knowledge(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Registrar la conexión entrante
-    # Idealmente, connect debería devolver un ID único o manejar la identificación
-    # pero por ahora, solo registraremos la conexión.
-    await manager.connect(websocket)
-    client_host = websocket.client.host if websocket.client else "desconocido"
-    logger.info(f"Cliente conectado: {client_host}")
-
+    client_host = "desconocido" # Valor por defecto
     try:
+        # Registrar la conexión entrante
+        await manager.connect(websocket)
+        client_host = websocket.client.host if websocket.client else "desconocido"
+        logger.info(f"Cliente conectado: {client_host}")
+
         while True:
             # Esperar mensajes JSON
+            # Si el cliente desconecta aquí, debería lanzar WebSocketDisconnect
             data = await websocket.receive_json()
             user_text = data.get("text")
-            # user_audio = data.get("audio") # Mantener para futura implementación
+            # user_audio = data.get("audio") # Futuro
 
             if user_text:
                 logger.info(f"Texto recibido de {client_host}: {user_text}")
                 try:
-                    # --- Procesamiento IA y TTS (igual que antes) ---
+                    # --- Procesamiento IA y TTS ---
                     context = km.get_knowledge()
                     system_prompt = f"Eres {context['rol']}. Usa el siguiente conocimiento para responder: {context['conocimientos']}"
                     respuesta = await generate_response_with_knowledge(system_prompt, user_text)
-                    logger.info(f"Respuesta LLM generada: {respuesta[:50]}...") # Log corto
+                    logger.info(f"Respuesta LLM generada para {client_host}: {respuesta[:50]}...")
                     tts_response = await tts.synthesize_speech(respuesta)
                     audio_data = await tts_response.aread()
-                    logger.info(f"Audio TTS generado: {len(audio_data)} bytes")
+                    logger.info(f"Audio TTS generado para {client_host}: {len(audio_data)} bytes")
 
-                    # --- *** CAMBIO PRINCIPAL AQUÍ *** ---
-                    # Enviar la respuesta a TODOS los clientes conectados a través del manager
-                    # En lugar de solo al 'websocket' que envió el mensaje.
+                    # --- Envío de Respuesta vía Broadcast ---
                     if audio_data:
-                        logger.info("Enviando audio a todos los clientes conectados...")
-                        # Necesitamos un método en ConnectionManager para hacer broadcast
+                        logger.info(f"Enviando audio a todos ({manager.get_connection_count()} cliente(s)) por solicitud de {client_host}...")
                         await manager.broadcast_bytes(audio_data)
                         await manager.broadcast_text("[✔] Audio generado y enviado correctamente.")
-                        # La llamada a n8n sigue siendo igual
-                        await send_to_n8n(user_text)
+                        await send_to_n8n(user_text) # n8n sigue igual
                     else:
-                        logger.warning("Audio vacío generado por TTS.")
+                        logger.warning(f"Audio vacío generado por TTS para solicitud de {client_host}.")
                         await manager.broadcast_text("[ERROR] Audio generado está vacío.")
-                    # --- *** FIN DEL CAMBIO PRINCIPAL *** ---
 
-                except Exception as e:
-                    error_msg = f"[❌] Error procesando texto '{user_text[:30]}...': {str(e)}"
-                    logger.error(error_msg, exc_info=True) # Log con traceback
-                    # Enviar error a todos los clientes
+                except Exception as e_inner:
+                    # --- Error DURANTE el procesamiento IA/TTS ---
+                    error_msg = f"[❌] Error procesando texto '{user_text[:30]}...' para {client_host}: {type(e_inner).__name__}"
+                    logger.error(error_msg, exc_info=True)
+                    # Enviar error a todos los clientes conectados (no solo al que originó)
+                    # porque no sabemos si el que originó sigue conectado si fue 'espectroapi'.
                     await manager.broadcast_text(error_msg)
+                    # Continuar el bucle while para este cliente si aún está conectado? O romper?
+                    # Podríamos continuar esperando más mensajes de este cliente si sigue conectado.
 
             # elif user_audio: # Futuro
             #     pass
             else:
                  logger.warning(f"Mensaje JSON recibido de {client_host} sin clave 'text': {data}")
-                 # Opcional: enviar un mensaje de error de formato
+                 # Opcional: enviar un mensaje de error de formato vía broadcast
                  # await manager.broadcast_text("[ERROR] Formato de mensaje inválido.")
 
 
     except WebSocketDisconnect:
-        logger.info(f"Cliente desconectado: {client_host}")
-        manager.disconnect(websocket) # Desregistrar al desconectar
-        # No intentar enviar mensaje aquí porque la conexión ya está cerrada
-    except Exception as e:
-        # Capturar otros errores inesperados en el bucle principal
-        logger.error(f"Error inesperado en bucle WebSocket para {client_host}: {e}", exc_info=True)
-        manager.disconnect(websocket) # Asegurar desconexión en caso de error
-        # No intentar enviar mensaje aquí porque la conexión podría estar rota
+        # El cliente cerró la conexión limpiamente mientras esperábamos en receive_json
+        logger.info(f"Cliente desconectado limpiamente: {client_host}")
+        # El bloque finally se encargará de llamar a manager.disconnect()
 
+    except Exception as e_outer:
+        # --- *** MANEJO DE ERRORES INESPERADOS EN EL BUCLE *** ---
+        # Esto captura errores como el "RuntimeError: WebSocket is not connected..."
+        # que ocurría al intentar llamar a receive_json en una conexión ya cerrada.
+        # También captura otros errores inesperados fuera del procesamiento de texto.
 
-# --- Implementación Simple de ConnectionManager (ws_manager.py) ---
-# Si no tienes este archivo, créalo (ws_manager.py).
-# Si ya lo tienes, asegúrate de que tenga métodos similares a estos.
+        error_msg_outer = f"Error inesperado en bucle WebSocket para {client_host}: {type(e_outer).__name__}"
+        logger.error(error_msg_outer, exc_info=True) # Loggear el error completo
 
+        # !! IMPORTANTE: NO intentar enviar mensaje usando 'websocket' aquí !!
+        # La conexión 'websocket' específica de esta instancia podría ser la que causó
+        # el error (ej: ya estaba cerrada). El broadcast se encarga de los demás.
+
+        # Salimos del bucle while True para esta instancia del handler.
+        # El bloque finally se encargará de la desconexión del manager.
+        # --- *** FIN DE LA MODIFICACIÓN *** ---
+
+    finally:
+        # Este bloque se ejecuta siempre al salir del try (sea por desconexión limpia,
+        # error manejado con 'break', o error no capturado).
+        # Asegura que la conexión se elimine del manager.
+        logger.info(f"Limpiando conexión para: {client_host}")
+        manager.disconnect(websocket)
+
+# Añadir método get_connection_count a ConnectionManager si no existe
+# Ejemplo en ws_manager.py:
 # class ConnectionManager:
-#     def __init__(self):
-#         self.active_connections: list[WebSocket] = []
-#         self.logger = logging.getLogger(__name__ + ".ConnectionManager")
-
-#     async def connect(self, websocket: WebSocket):
-#         await websocket.accept()
-#         self.active_connections.append(websocket)
-#         self.logger.info(f"Nueva conexión aceptada. Total: {len(self.active_connections)}")
-
-#     def disconnect(self, websocket: WebSocket):
-#         if websocket in self.active_connections:
-#             self.active_connections.remove(websocket)
-#             self.logger.info(f"Conexión eliminada. Total: {len(self.active_connections)}")
-#         else:
-#             self.logger.warning("Intento de desconectar una conexión no registrada.")
-
-
-#     async def broadcast_text(self, message: str):
-#         disconnected_clients = []
-#         for connection in self.active_connections:
-#             try:
-#                 await connection.send_text(message)
-#             except (WebSocketDisconnect, ConnectionClosedOK, RuntimeError) as e:
-#                 # Marcar para eliminar si falla el envío (probablemente desconectado)
-#                 self.logger.warning(f"Error enviando texto a un cliente (será eliminado): {e}")
-#                 disconnected_clients.append(connection)
-#             except Exception as e:
-#                 self.logger.error(f"Error inesperado enviando texto a un cliente: {e}", exc_info=True)
-#                 disconnected_clients.append(connection) # Marcar también si hay error grave
-
-#         # Limpiar clientes desconectados después de iterar
-#         for client in disconnected_clients:
-#             self.disconnect(client)
-
-
-#     async def broadcast_bytes(self, data: bytes):
-#         disconnected_clients = []
-#         for connection in self.active_connections:
-#             try:
-#                 await connection.send_bytes(data)
-#             except (WebSocketDisconnect, ConnectionClosedOK, RuntimeError) as e:
-#                 # Marcar para eliminar si falla el envío
-#                 self.logger.warning(f"Error enviando bytes a un cliente (será eliminado): {e}")
-#                 disconnected_clients.append(connection)
-#             except Exception as e:
-#                 self.logger.error(f"Error inesperado enviando bytes a un cliente: {e}", exc_info=True)
-#                 disconnected_clients.append(connection)
-
-#         # Limpiar clientes desconectados
-#         for client in disconnected_clients:
-#             self.disconnect(client)
-
-
-# # Asegúrate de inicializar el manager en main.py como antes:
-# # manager = ConnectionManager()
-
-
-# --- Fin Implementación Simple ---
+#     ... (métodos connect, disconnect, broadcast_*) ...
+#     def get_connection_count(self) -> int:
+#          return len(self.active_connections)
 
 
 if __name__ == "__main__":
     import uvicorn
-    # reload=True es útil para desarrollo, quítalo o ponlo a False en producción
+    # Quitar reload=True para producción
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=False)
