@@ -1,25 +1,54 @@
+// frontend/src/App.jsx (v3)
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Visualizer from './components/Visualizer';
-import AudioPlayer from './components/AudioPlayer';
+import AudioPlayer from './components/AudioPlayer'; // Importa la v3 de AudioPlayer
 
 function App() {
   const [audioData, setAudioData] = useState(null);
   const [analyser, setAnalyser] = useState(null);
   const [status, setStatus] = useState('⚪ Desconectado');
-  const [detectedEmotion, setDetectedEmotion] = useState('---'); // Mantener si aún lo usas para algo
-  const [inputText, setInputText] = useState(''); // Estado para el campo de texto
+  const [detectedEmotion, setDetectedEmotion] = useState('---');
+  const [inputText, setInputText] = useState('');
 
   const socketRef = useRef(null);
+  // --- NUEVO: Ref para el AudioContext y flag para saber si ya intentamos reanudar ---
+  const audioCtxRef = useRef(null);
+  const audioContextResumed = useRef(false);
+  // ------------------------------------------------------------------------------
 
-  // --- Función Refactorizada para Enviar Mensajes al Servidor ---
-  const sendMessageToServer = useCallback((textPayload) => {
+  // --- Función para asignar la ref del AudioContext ---
+  // Se la pasaremos a AudioPlayer para que nos dé la instancia del contexto
+  const handleSetAudioContextRef = useCallback((context) => {
+     console.log("App.js: Recibida referencia de AudioContext desde AudioPlayer.", context?.state);
+     audioCtxRef.current = context;
+  }, []);
+
+
+  // --- Función para Enviar Mensajes (Modificada para intentar resume) ---
+  const sendMessageToServer = useCallback(async (textPayload) => { // Hacerla async
+    // --- NUEVO: Intentar reanudar AudioContext en la primera interacción ---
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended' && !audioContextResumed.current) {
+      console.log("App.js: Detectada primera interacción con contexto suspendido. Intentando reanudar...");
+      try {
+        await audioCtxRef.current.resume();
+        console.log("App.js: Resume intentado. Nuevo estado:", audioCtxRef.current.state);
+        // Marcar como intentado incluso si falla, para no reintentar innecesariamente.
+        // La lógica en AudioPlayer verificará si realmente está 'running'.
+        audioContextResumed.current = true;
+        // Opcional: Forzar un re-render o avisar a AudioPlayer si fuera necesario (poco probable)
+      } catch (err) {
+        console.error("App.js: Error durante audioContext.resume():", err);
+        // Informar al usuario podría ser útil aquí si falla el resume
+        alert("No se pudo activar el audio automáticamente. Puede que necesites interactuar más o revisar permisos.");
+      }
+    }
+    // ---------------------------------------------------------------------
+
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       try {
-        // Siempre enviamos el objeto con la clave "text"
         const message = JSON.stringify({ text: textPayload });
         socketRef.current.send(message);
         console.log("Mensaje enviado -> Servidor:", textPayload);
-        // Opcional: Indicar que se está esperando respuesta de la IA
         // setStatus("🤖 Procesando IA...");
       } catch (error) {
          console.error("Error al enviar mensaje (JSON stringify):", error);
@@ -27,135 +56,114 @@ function App() {
     } else {
       console.warn("WebSocket no conectado al intentar enviar:", textPayload);
       setStatus("⚠️ WebSocket no conectado");
-      // Podrías intentar reconectar aquí o mostrar un error más persistente
     }
-  }, []); // useCallback con array vacío porque no depende de props o estado externo a la función
+  }, []); // Dependencia vacía
 
 
   // --- Conexión WebSocket y Manejador de Mensajes ---
   useEffect(() => {
     const socket = new WebSocket("wss://backvisualizador.scanmee.io/ws");
     socketRef.current = socket;
+    socket.onopen = () => { console.log("🟢 WebSocket conectado"); setStatus("✅ Conectado"); };
+    socket.onclose = (event) => { console.warn("🔌 WebSocket cerrado", event.reason); setStatus(`⚪ Desconectado (${event.code})`); };
+    socket.onerror = (error) => { console.error("❌ WebSocket error:", error); setStatus("❌ Error de conexión"); };
 
-    socket.onopen = () => {
-      console.log("🟢 WebSocket conectado");
-      setStatus("✅ Conectado");
-    };
-
-    socket.onclose = (event) => {
-      console.warn("🔌 WebSocket cerrado", event.reason);
-      setStatus(`⚪ Desconectado (${event.code})`);
-      // Limpiar referencias o estados si es necesario al desconectar
-    };
-
-    socket.onerror = (error) => {
-      console.error("❌ WebSocket error:", error);
-      setStatus("❌ Error de conexión");
-    };
-
-    // --- MANEJADOR DE MENSAJES MODIFICADO ---
     socket.onmessage = (event) => {
-      // 1. Comprobar si es Audio (Blob)
       if (event.data instanceof Blob) {
-        setStatus("🔊 Recibiendo audio..."); // Indicar que llegó audio
+        setStatus("🔊 Recibiendo audio...");
         event.data.arrayBuffer().then((buffer) => {
-          setAudioData(buffer);
-          // AudioPlayer se encargará de reproducirlo y actualizar el analyser
+          setAudioData(buffer); // Esto disparará el useEffect de AudioPlayer
         }).catch(err => console.error("Error convirtiendo Blob a ArrayBuffer", err));
-        // Podrías resetear el estado de emoción aquí si quieres
-        // setDetectedEmotion('---');
-        setStatus("▶️ Reproduciendo..."); // O un estado similar
+        setStatus("▶️ Procesando audio..."); // Cambiado de "Reproduciendo"
       }
-      // 2. Comprobar si es Texto (String)
       else if (typeof event.data === 'string') {
         let parsedData;
         try {
-          // Intentar parsear como JSON
           parsedData = JSON.parse(event.data);
-
-          // 3. Verificar si tiene el formato { text: "..." }
           if (parsedData && typeof parsedData.text === 'string') {
-            // ¡RECIBIDO TEXTO DEL API (espectroapi)!
             const receivedText = parsedData.text;
             console.log("Texto recibido <- API/Otro:", receivedText);
-
-            // *** ACCIÓN NUEVA: ***
-            // Iniciar la conversación con la IA usando este texto.
-            // Llamamos a la misma función que usamos para enviar texto del input.
+            // Iniciar conversación reenviando el texto
+            // La llamada a sendMessageToServer intentará reanudar el contexto si es necesario
             sendMessageToServer(receivedText);
-            setStatus("💬 Texto recibido, iniciando IA..."); // Actualizar estado
-
+            setStatus("💬 Texto recibido, iniciando IA...");
           } else {
-            // Es un string JSON, pero no tiene la clave "text" esperada
             console.warn("Mensaje JSON no reconocido recibido:", parsedData);
           }
         } catch (error) {
-          // No era un string JSON válido, tratar como texto plano
+          // Mensajes como "[✔] Audio generado..." entrarán aquí
           console.log("Mensaje de texto plano recibido:", event.data);
-          // Aquí podrías decidir si quieres hacer algo con mensajes de texto plano
+           if (event.data.startsWith("[✔]")) {
+                setStatus("✅ Listo"); // Actualizar estado en éxito
+           } else if (event.data.startsWith("[ERROR]") || event.data.startsWith("[❌]")) {
+                setStatus("⚠️ Error Backend"); // Actualizar estado en error
+           }
         }
       } else {
-        // Tipo de mensaje desconocido
         console.log("Tipo de mensaje no manejado recibido:", event.data);
       }
     };
 
-    // Función de limpieza
     return () => {
-        if (socketRef.current) {
-            socketRef.current.close();
-            console.log("WebSocket cerrado al desmontar");
-        }
+      if (socketRef.current) {
+        socketRef.current.close();
+        console.log("WebSocket cerrado al desmontar");
+      }
     };
-  }, [sendMessageToServer]); // Incluir sendMessageToServer como dependencia de useEffect
+  }, [sendMessageToServer]); // sendMessageToServer es dependencia estable
 
   // --- Manejador para el botón Enviar ---
   const handleSendText = () => {
-    const textToSend = inputText.trim(); // Obtener texto del estado y quitar espacios extra
+    const textToSend = inputText.trim();
     if (textToSend) {
-      sendMessageToServer(textToSend); // Usar la función refactorizada
-      setInputText(''); // Limpiar el campo de texto después de enviar
+      // sendMessageToServer ahora intentará reanudar el contexto si es la primera vez
+      sendMessageToServer(textToSend);
+      setInputText('');
     } else {
       console.log("Input vacío, no se envía nada.");
     }
   };
 
-  // --- Manejador para tecla Enter en el input ---
+  // --- Manejador para tecla Enter ---
    const handleKeyPress = (event) => {
     if (event.key === 'Enter') {
-      handleSendText();
+      handleSendText(); // Llama a la misma función, que intentará reanudar
     }
   };
 
-
   // --- Renderizado ---
   return (
-    // (El JSX se mantiene igual que en la versión anterior,
-    // solo cambiamos el input para que use el estado 'inputText')
     <div style={{ textAlign: 'center', marginTop: '20px' }}>
       <h1>Visualizador IA</h1>
       <Visualizer analyser={analyser} />
-      <AudioPlayer audioData={audioData} onStreamReady={setAnalyser} />
+      {/* Pasar la función para setear la ref del contexto */}
+      <AudioPlayer
+          audioData={audioData}
+          onStreamReady={setAnalyser}
+          setAudioContextRef={handleSetAudioContextRef}
+      />
       <div style={{ marginTop: '30px' }}>
         <input
           type="text"
-          id="textInput" // ID ya no es estrictamente necesario, pero lo dejamos por si acaso
+          id="textInput"
           placeholder="Haz tu pregunta..."
-          value={inputText} // Controlado por el estado
-          onChange={(e) => setInputText(e.target.value)} // Actualiza el estado al escribir
-          onKeyPress={handleKeyPress} // Enviar con Enter
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          onKeyPress={handleKeyPress}
           style={{ padding: '10px', width: '300px' }}
         />
         <button
-          onClick={handleSendText}
+          onClick={handleSendText} // Este clic es la interacción clave
           style={{ padding: '10px 20px', marginLeft: '10px' }}
         >
           Enviar
         </button>
       </div>
-       {/* Mostrar estado y emoción (opcional) */}
+       {/* Mostrar estado */}
        <div style={{ marginTop: '10px', fontSize: '12px', color: '#555' }}>
-           {status} {detectedEmotion !== '---' && `| Emoción: ${detectedEmotion}`}
+           {status}
+           {/* Ya no mostramos emoción aquí, o como prefieras */}
+           {/* {detectedEmotion !== '---' && `| Emoción: ${detectedEmotion}`} */}
        </div>
     </div>
   );
