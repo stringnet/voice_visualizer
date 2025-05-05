@@ -6,47 +6,60 @@ function AudioPlayer({ audioData, onStreamReady }) {
   const analyserRef = useRef(null);
   const isProcessingRef = useRef(false);
 
-  // --- Efecto para Inicialización Única ---
+  // --- Efecto para Inicialización Única (al montar) ---
   useEffect(() => {
-    console.log("AudioPlayer: Montado. Inicializando Web Audio...");
+    console.log("AudioPlayer v2: Montado. Inicializando Web Audio...");
     try {
+      // Crear AudioContext y Analyser solo una vez
       const context = new (window.AudioContext || window.webkitAudioContext)();
       const analyserNode = context.createAnalyser();
+      // Conectar Analyser al destino final (altavoces)
       analyserNode.connect(context.destination);
+      // Guardar en refs
       audioContextRef.current = context;
       analyserRef.current = analyserNode;
-      console.log("AudioPlayer: AudioContext y Analyser creados.", context.state);
+      console.log("AudioPlayer v2: AudioContext y Analyser creados.", context.state);
+
+      // Informar al componente padre que el Analyser está listo (solo una vez)
       if (onStreamReady) {
         onStreamReady(analyserNode);
       }
+
       if (context.state === 'suspended') {
-        console.warn("AudioPlayer: AudioContext 'suspended'. Requiere interacción o resume().");
+        console.warn("AudioPlayer v2: AudioContext 'suspended'. Requiere interacción o resume().");
       }
     } catch (error) {
-      console.error("AudioPlayer: Error inicializando Web Audio API:", error);
+      console.error("AudioPlayer v2: Error inicializando Web Audio API:", error);
     }
+
+    // --- Función de Limpieza (al desmontar) ---
     return () => {
-      console.log("AudioPlayer: Desmontando. Cerrando AudioContext...");
+      console.log("AudioPlayer v2: Desmontando. Cerrando AudioContext...");
       audioContextRef.current?.close().catch(err => console.error("Error cerrando AudioContext:", err));
     };
-  }, [onStreamReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Ejecutar solo al montar (onStreamReady debería ser estable)
 
 
   // --- Efecto para Procesar Nuevos Datos de Audio ---
   useEffect(() => {
+    // Salir si no hay datos, contexto, analizador o si ya está procesando
     if (!audioData || !audioContextRef.current || !analyserRef.current || isProcessingRef.current) {
       return;
     }
 
     isProcessingRef.current = true;
+    // Copiar buffer porque decodeAudioData puede consumirlo
     const audioDataCopy = audioData.slice(0);
 
-    const playDecodedAudio = async (buffer) => {
+    // Definir función asíncrona para manejar la reproducción
+    const playDecodedAudio = async () => {
       const audioContext = audioContextRef.current;
       const analyserNode = analyserRef.current;
 
+      // Salir si falta algo (doble chequeo)
       if (!audioContext || !analyserNode) {
-        console.error("AudioPlayer: Contexto o Analizador no disponibles.");
+        console.error("AudioPlayer v2: Contexto o Analizador no disponibles en playDecodedAudio.");
         isProcessingRef.current = false;
         return;
       }
@@ -54,56 +67,64 @@ function AudioPlayer({ audioData, onStreamReady }) {
       try {
         // --- Lógica de Reanudación Mejorada ---
         if (audioContext.state === 'suspended') {
-          console.log("AudioPlayer: Context suspendido, intentando reanudar...");
+          console.log("AudioPlayer v2: Context suspendido, intentando reanudar...");
           try {
             await audioContext.resume(); // Esperar a que la promesa termine
-            console.log("AudioPlayer: Resume intentado. Nuevo estado:", audioContext.state);
-            // Si sigue sin estar 'running' después de intentar, es un problema.
-            if (audioContext.state !== 'running') {
-               console.error("AudioPlayer: Resume() no cambió el estado a 'running'. Se requiere gesto del usuario.");
-               // Opcional: notificar al usuario que necesita interactuar.
-               // alert("Por favor, haz clic en la página para activar el audio.");
-               isProcessingRef.current = false;
-               return; // Salir, no se puede reproducir
-            }
+            console.log("AudioPlayer v2: Resume intentado. Nuevo estado:", audioContext.state);
           } catch (resumeError) {
-            console.error("AudioPlayer: Error durante audioContext.resume():", resumeError);
+            console.error("AudioPlayer v2: Error durante audioContext.resume():", resumeError);
+            // Si resume falla, no podemos continuar
             isProcessingRef.current = false;
-            return; // Salir, no se puede reproducir
+            return;
           }
         }
         // --- Fin Lógica de Reanudación ---
 
-        // Ahora deberíamos estar en estado 'running' si todo fue bien
-        console.log("AudioPlayer: Decodificando buffer...");
-        const decodedBuffer = await audioContext.decodeAudioData(audioDataCopy); // Usar await aquí también
-        console.log("AudioPlayer: Buffer decodificado. Creando source...");
+        // Verificar de nuevo el estado después del intento de reanudar
+        if (audioContext.state !== 'running') {
+          console.error("AudioPlayer v2: AudioContext no está 'running' después de intentar reanudar. No se puede reproducir.");
+          isProcessingRef.current = false;
+          return;
+        }
+
+        // --- Decodificación y Reproducción ---
+        console.log("AudioPlayer v2: Decodificando buffer...");
+        const decodedBuffer = await audioContext.decodeAudioData(audioDataCopy);
+        console.log("AudioPlayer v2: Buffer decodificado. Creando source...");
 
         const source = audioContext.createBufferSource();
         source.buffer = decodedBuffer;
+        // Conectar la fuente al analyser (que ya está conectado al destino)
         source.connect(analyserNode);
 
         source.onended = () => {
-          console.log("AudioPlayer: Reproducción del chunk finalizada.");
-          source.disconnect();
-          isProcessingRef.current = false;
+          console.log("AudioPlayer v2: Reproducción del chunk finalizada.");
+          // Desconectar nodo fuente para liberar memoria, solo si aún existe
+          try {
+             source.disconnect();
+          } catch(disconnectError) {
+             console.warn("AudioPlayer v2: Error desconectando source (puede ser normal si el contexto cerró):", disconnectError);
+          }
+          isProcessingRef.current = false; // Liberar bloqueo para el próximo chunk
         };
 
-        console.log("AudioPlayer: Iniciando reproducción...");
-        source.start(0);
+        console.log("AudioPlayer v2: Iniciando reproducción...");
+        source.start(0); // Iniciar reproducción
 
       } catch (err) {
-        console.error("AudioPlayer: Error en playDecodedAudio (decodificación o reproducción):", err);
-        isProcessingRef.current = false;
+        // Capturar errores de decodeAudioData o source.start()
+        console.error("AudioPlayer v2: Error en playDecodedAudio (decodificación o reproducción):", err);
+        isProcessingRef.current = false; // Liberar bloqueo en caso de error
       }
     };
 
-    // Llamar a la función asíncrona principal
-    playDecodedAudio(null); // Pasamos null porque la decodificación se hace DENTRO ahora
+    // Llamar a la función asíncrona
+    playDecodedAudio();
 
-  }, [audioData]); // Depende de audioData
+  }, [audioData]); // Depende solo de audioData para ejecutarse
 
 
+  // Este componente no renderiza nada visible
   return null;
 }
 
