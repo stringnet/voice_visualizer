@@ -36,7 +36,7 @@ function Visualizer({ analyser }) {
         
         // Para la forma de onda (centro)
         const timeDomainDataArray = analyser ? new Uint8Array(analyser.fftSize) : new Uint8Array(2048); // fftSize suele ser 2048 por defecto
-        const numWaveformSegments = 128; // Número de segmentos para la forma de onda
+        const numWaveformSegments = 256; // Número de segmentos para la forma de onda
 
         // --- 1. Anillo Exterior de Líneas de Frecuencia ---
         const ringRadius = 5;
