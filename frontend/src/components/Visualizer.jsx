@@ -1,4 +1,4 @@
-// frontend/src/components/Visualizer.jsx (Modificado para parecerse a la imagen)
+// frontend/src/components/Visualizer.jsx (Versión Final Mejorada)
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
@@ -7,22 +7,27 @@ function Visualizer({ analyser }) {
     const animationFrameId = useRef(null); // Para limpiar el bucle de animación
 
     useEffect(() => {
-        if (!mountRef.current) return;
+        if (!mountRef.current || !analyser) { // Esperar a que analyser esté disponible
+            if (!analyser) console.warn("Visualizer: Analyser no disponible al montar o actualizar.");
+            return; // No hacer nada si no hay mountRef o analyser
+        }
+
+        console.log("Visualizer: Montando/Actualizando con analyser.");
+
+        const currentMount = mountRef.current; // Guardar referencia para la limpieza
 
         // --- Configuración Básica de Escena, Cámara y Renderer ---
         const scene = new THREE.Scene();
         const bgColor = new THREE.Color(0x010014); // Fondo azul oscuro/negro
         scene.background = bgColor;
 
-        const currentMount = mountRef.current; // Guardar referencia para la limpieza
-
         const camera = new THREE.PerspectiveCamera(
             75,
-            currentMount.clientWidth / currentMount.clientHeight, // Usar dimensiones del div
+            currentMount.clientWidth / currentMount.clientHeight,
             0.1,
             1000
         );
-        camera.position.z = 12; // Un poco más cerca que antes
+        camera.position.z = 10; // Acercar un poco más la cámara para que se vea más grande
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
@@ -30,75 +35,90 @@ function Visualizer({ analyser }) {
         currentMount.appendChild(renderer.domElement);
 
         // --- Datos del Analizador ---
-        // Para las barras de frecuencia (anillo exterior)
-        const frequencyDataArray = analyser ? new Uint8Array(analyser.frequencyBinCount) : new Uint8Array(128); // Ajusta según analyser.frequencyBinCount
-        const numFrequencyLines = 80; // Número de líneas para el anillo, puedes ajustar esto
-        
-        // Para la forma de onda (centro)
-        const timeDomainDataArray = analyser ? new Uint8Array(analyser.fftSize) : new Uint8Array(2048); // fftSize suele ser 2048 por defecto
-        const numWaveformSegments = 256; // Número de segmentos para la forma de onda
+        const frequencyBinCount = analyser.frequencyBinCount; // Número de valores de frecuencia
+        const frequencyDataArray = new Uint8Array(frequencyBinCount);
 
-        // --- 1. Anillo Exterior de Líneas de Frecuencia ---
-        const ringRadius = 5;
-        const ringLinesGroup = new THREE.Group(); // Grupo para rotar las líneas si quieres
-        const ringLineGeometries = [];
-        const ringLineMaterials = [];
-        const ringLines = [];
+        const fftSize = analyser.fftSize; // Usualmente 2048
+        const timeDomainDataArray = new Uint8Array(fftSize);
 
-        for (let i = 0; i < numFrequencyLines; i++) {
-            const material = new THREE.LineBasicMaterial({
-                // Color se actualizará en animate, pero podemos definir un HSL base
-                color: new THREE.Color().setHSL(i / numFrequencyLines, 0.8, 0.5),
-                transparent: true,
-                opacity: 0.75,
-                blending: THREE.AdditiveBlending,
+        // --- 1. Anillo Exterior de Barras 3D (Cajas) ---
+        const numBars = 64; // Número de barras en el círculo
+        const barBaseRadius = 3.5; // Radio del círculo donde se posicionan las barras
+        const barWidth = 0.15;
+        const barDepth = 0.15;
+        const barInitialHeight = 0.05; // Altura mínima
+
+        const barsGroup = new THREE.Group();
+        const barMeshes = [];
+
+        for (let i = 0; i < numBars; i++) {
+            const geometry = new THREE.BoxGeometry(barWidth, barInitialHeight, barDepth);
+            // Centrar la base de la caja para que escale desde abajo
+            geometry.translate(0, barInitialHeight / 2, 0);
+
+            const material = new THREE.MeshStandardMaterial({
+                color: new THREE.Color().setHSL(i / numBars, 1.0, 0.6), // Colores vivos
+                roughness: 0.7,
+                metalness: 0.3,
+                emissive: new THREE.Color().setHSL(i / numBars, 1.0, 0.1), // Ligero brillo propio
+                emissiveIntensity: 0.5
             });
-            ringLineMaterials.push(material);
 
-            const points = [];
-            points.push(new THREE.Vector3(0, 0, 0)); // Punto interior
-            points.push(new THREE.Vector3(0, 1, 0)); // Punto exterior (se escalará)
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            ringLineGeometries.push(geometry);
+            const bar = new THREE.Mesh(geometry, material);
 
-            const line = new THREE.Line(geometry, material);
-            ringLines.push(line);
-            ringLinesGroup.add(line);
+            const angle = (i / numBars) * Math.PI * 2;
+            bar.position.x = Math.cos(angle) * barBaseRadius;
+            bar.position.y = Math.sin(angle) * barBaseRadius;
+            // Orientar la barra para que su "frente" (lado X-Y si no rotamos) mire al centro
+            // O simplemente dejarlas verticales y la cámara las verá de lado.
+            // Para que apunten radialmente (su "altura" se aleje del centro):
+            bar.lookAt(0, 0, 0); // Apuntar al centro
+            bar.rotateX(Math.PI / 2); // Rotar para que "altura" (eje Y local) sea radial
+            // Alternativamente, si quieres que crezcan verticalmente (eje Y global):
+            // bar.rotation.z = angle + Math.PI / 2; // Orientar el 'ancho' radialmente
+
+            barMeshes.push(bar);
+            barsGroup.add(bar);
         }
-        scene.add(ringLinesGroup);
+        scene.add(barsGroup);
+
 
         // --- 2. Forma de Onda Central ---
-        const waveformMaterial = new THREE.LineBasicMaterial({
-            color: 0xaa00ff, // Morado inicial, se puede variar
-            linewidth: 2, // Puede que no funcione en todos los hardwares, depende del driver GL
+        const numWaveformSegments = 128;
+        const waveformMaterial = new THREE.MeshBasicMaterial({ // Usar MeshBasicMaterial si no necesita luces
+            color: 0xff33cc, // Rosa/Magenta encendido
             transparent: true,
-            opacity: 0.8,
+            opacity: 0.9,
             blending: THREE.AdditiveBlending,
         });
-        const waveformPoints = new Float32Array(numWaveformSegments * 3);
-        const waveformGeometry = new THREE.BufferGeometry();
-        waveformGeometry.setAttribute('position', new THREE.BufferAttribute(waveformPoints, 3));
-        const waveformLine = new THREE.Line(waveformGeometry, waveformMaterial);
+        // Para una línea con grosor variable (usaremos TubeGeometry)
+        const waveformPoints = [];
+        for (let i = 0; i < numWaveformSegments; i++) {
+            waveformPoints.push(new THREE.Vector3(0, 0, 0)); // Puntos iniciales
+        }
+        const waveformCurve = new THREE.CatmullRomCurve3(waveformPoints, false, 'catmullrom', 0.0); // Curva suave
+        const waveformTubeGeometry = new THREE.TubeGeometry(waveformCurve, numWaveformSegments -1 , 0.03, 8, false); // Radio pequeño para la línea
+        const waveformLine = new THREE.Mesh(waveformTubeGeometry, waveformMaterial);
         scene.add(waveformLine);
 
 
-        // --- 3. Partículas Flotantes (similar a tu original) ---
+        // --- 3. Partículas Flotantes (sin cambios mayores) ---
         const particlesGeometry = new THREE.BufferGeometry();
-        const particlesCount = 200; // Reducido un poco
+        const particlesCount = 250;
         const particlesPos = new Float32Array(particlesCount * 3);
-        const particleBaseRadius = ringRadius + 1.5; // Para que estén un poco más afuera del anillo
+        const particleRingRadius = barBaseRadius + 1.0;
 
         for (let i = 0; i < particlesCount; i++) {
             const angle = Math.random() * Math.PI * 2;
-            const r = particleBaseRadius + Math.random() * 3; // Esparcir un poco más
+            const r = particleRingRadius + Math.random() * 2.5;
             particlesPos[i * 3] = Math.cos(angle) * r;
             particlesPos[i * 3 + 1] = Math.sin(angle) * r;
-            particlesPos[i * 3 + 2] = (Math.random() - 0.5) * 4; // Más dispersión en Z
+            particlesPos[i * 3 + 2] = (Math.random() - 0.5) * 3;
         }
         particlesGeometry.setAttribute('position', new THREE.BufferAttribute(particlesPos, 3));
         const particlesMaterial = new THREE.PointsMaterial({
             color: 0xffffff,
-            size: 0.07,
+            size: 0.06,
             transparent: true,
             opacity: 0.5,
             blending: THREE.AdditiveBlending,
@@ -106,6 +126,18 @@ function Visualizer({ analyser }) {
         });
         const particles = new THREE.Points(particlesGeometry, particlesMaterial);
         scene.add(particles);
+
+        // --- Luces ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // Luz ambiental más brillante
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(1, 1, 1).normalize();
+        scene.add(directionalLight);
+
+        const pointLight = new THREE.PointLight(0x88ddff, 0.7, 30); // Luz azulada
+        pointLight.position.set(0, 0, 5);
+        scene.add(pointLight);
 
 
         // --- Manejo de Redimensionamiento de Ventana ---
@@ -118,118 +150,102 @@ function Visualizer({ analyser }) {
         };
         window.addEventListener('resize', handleResize);
 
-
         // --- Bucle de Animación ---
         let time = 0;
         function animate() {
             animationFrameId.current = requestAnimationFrame(animate);
             time += 0.01;
 
-            if (analyser) {
-                // Actualizar datos de frecuencia para el anillo
-                analyser.getByteFrequencyData(frequencyDataArray);
-                
-                // Actualizar datos de forma de onda para el centro
-                analyser.getByteTimeDomainData(timeDomainDataArray);
+            analyser.getByteFrequencyData(frequencyDataArray);
+            analyser.getByteTimeDomainData(timeDomainDataArray);
 
-                // 1. Animar Anillo de Frecuencias
-                for (let i = 0; i < numFrequencyLines; i++) {
-                    const line = ringLines[i];
-                    const angle = (i / numFrequencyLines) * Math.PI * 2;
-                    
-                    // Usar un subconjunto de frequencyDataArray para mapear a numFrequencyLines
-                    const dataIndex = Math.floor((i / numFrequencyLines) * (frequencyDataArray.length / 2)); // Solo la mitad inferior del espectro
-                    const amplitude = frequencyDataArray[dataIndex] / 255; // Normalizar 0-1
+            // 1. Animar Barras 3D (Cajas)
+            for (let i = 0; i < numBars; i++) {
+                const bar = barMeshes[i];
+                const dataIndex = Math.floor((i / numBars) * (frequencyBinCount * 0.5)); // Usar la mitad inferior del espectro
+                const amplitude = frequencyDataArray[dataIndex] / 255.0; // Normalizar 0-1
 
-                    const length = 0.5 + amplitude * 3; // Longitud base + reacción al sonido
+                // Animar la altura (escala en Y local, ya que la base se transladó a 0)
+                const targetScaleY = Math.max(1, 0.1 + amplitude * 25); // Altura mínima de 0.05 * escala base
+                bar.scale.y += (targetScaleY - bar.scale.y) * 0.2; // Suavizar animación
 
-                    // Posición interior (en el radio)
-                    const innerX = Math.cos(angle) * ringRadius;
-                    const innerY = Math.sin(angle) * ringRadius;
-                    
-                    // Posición exterior
-                    const outerX = Math.cos(angle) * (ringRadius + length);
-                    const outerY = Math.sin(angle) * (ringRadius + length);
-
-                    const positions = line.geometry.attributes.position.array;
-                    positions[0] = innerX;
-                    positions[1] = innerY;
-                    // positions[2] = 0; // Z es 0
-                    positions[3] = outerX;
-                    positions[4] = outerY;
-                    // positions[5] = 0; // Z es 0
-                    line.geometry.attributes.position.needsUpdate = true;
-
-                    // Cambiar color de la línea (degradado circular)
-                    ringLineMaterials[i].color.setHSL((angle / (Math.PI * 2)) + time * 0.05, 0.8, 0.4 + amplitude * 0.3);
-                }
-
-                // 2. Animar Forma de Onda Central
-                const wfPositions = waveformLine.geometry.attributes.position.array;
-                const sliceWidth = (ringRadius * 1.6) / numWaveformSegments; // Ancho de la forma de onda
-                let xPos = - (ringRadius * 0.8); // Centrar la forma de onda
-
-                for (let i = 0; i < numWaveformSegments; i++) {
-                    const dataIndex = Math.floor((i / numWaveformSegments) * timeDomainDataArray.length);
-                    const v = timeDomainDataArray[dataIndex] / 128.0; // Normalizar -1 a 1
-                    const yPos = (v - 1.0) * 1.5; // Escalar y desplazar
-
-                    wfPositions[i * 3] = xPos;
-                    wfPositions[i * 3 + 1] = yPos;
-                    wfPositions[i * 3 + 2] = 0; // En el plano Z=0
-                    xPos += sliceWidth;
-                }
-                waveformLine.geometry.attributes.position.needsUpdate = true;
-                // Cambiar color de la forma de onda (ejemplo: un solo color que pulsa o cambia)
-                const waveformColorIntensity = (frequencyDataArray[5] / 255); // Usar una frecuencia baja para la intensidad
-                waveformMaterial.color.setHSL(0.75 + waveformColorIntensity * 0.1, 0.8, 0.4 + waveformColorIntensity*0.4); // Tonos morados/azules
+                // Animar color/emisión
+                bar.material.emissiveIntensity = amplitude * 0.8;
+                bar.material.color.setHSL(i / numBars + time * 0.02, 1.0, 0.5 + amplitude * 0.2);
             }
+
+            // 2. Animar Forma de Onda Central (TubeGeometry)
+            const waveWidth = barBaseRadius * 0.8; // Ancho de la forma de onda
+            const numPointsInCurve = waveformCurve.points.length;
+
+            for (let i = 0; i < numPointsInCurve; i++) {
+                const dataIndex = Math.floor((i / (numPointsInCurve -1)) * fftSize);
+                const normalizedValue = timeDomainDataArray[dataIndex] / 128.0 - 1.0; // -1 a 1
+
+                const x = (i / (numPointsInCurve -1)) * waveWidth - (waveWidth / 2); // Centrar en X
+                const y = normalizedValue * 0.8; // Altura de la onda
+                waveformCurve.points[i].set(x, y, 0);
+            }
+            // Actualizar la geometría del tubo con los nuevos puntos de la curva
+            // Nota: Recrear TubeGeometry en cada frame es MUY costoso.
+            // Una mejor aproximación sería usar un Shader o actualizar los vértices de una geometría existente.
+            // Por simplicidad, aquí actualizamos los puntos de la curva y Three.js se encarga con TubeGeometry
+            // pero para rendimiento óptimo, esto necesitaría otra técnica.
+            // Para este ejemplo, asumimos que TubeGeometry se actualiza o la curva lo hace visible.
+            // Dado que TubeGeometry no se actualiza dinámicamente así, vamos a actualizar sus vértices.
+            const newTubeGeom = new THREE.TubeGeometry(waveformCurve, numWaveformSegments -1, 0.03, 8, false);
+            waveformLine.geometry.dispose(); // Desechar la geometría vieja
+            waveformLine.geometry = newTubeGeom; // Asignar la nueva
+            
+            // Animar color del material de la forma de onda
+             const intensity = frequencyDataArray[Math.floor(frequencyBinCount * 0.1)] / 255; // Usar una frecuencia baja
+             waveformMaterial.color.setHSL(0.8 + intensity * 0.2, 1.0, 0.5 + intensity * 0.3);
+
 
             // Animar partículas
-            particles.rotation.z += 0.0005;
-            // Mover partículas individualmente para un efecto más "flotante"
+            particles.rotation.z += 0.0003;
             const pPos = particles.geometry.attributes.position.array;
             for (let i = 0; i < particlesCount; i++) {
-                pPos[i * 3 + 2] += Math.sin(time + i) * 0.003; // Movimiento suave en Z
-                 if (pPos[i * 3 + 2] > 2 || pPos[i * 3 + 2] < -2) pPos[i * 3 + 2] *= -0.9; // Rebotar suavemente
+                pPos[i * 3 + 2] += Math.sin(time * 0.5 + i) * 0.005;
+                 if (pPos[i * 3 + 2] > 1.5 || pPos[i * 3 + 2] < -1.5) pPos[i * 3 + 2] *= -0.95;
             }
             particles.geometry.attributes.position.needsUpdate = true;
-
 
             renderer.render(scene, camera);
         }
 
-        // Iniciar animación si el analizador está disponible
-        if (analyser) {
-            animate();
-        } else {
-             // Si no hay analizador, renderizar una escena estática o un mensaje
-             renderer.render(scene, camera); // Renderiza al menos una vez los elementos estáticos
-             console.warn("Visualizer: Analyser no disponible. La animación reactiva al audio no se iniciará.");
-        }
+        animate(); // Iniciar el bucle de animación
 
-        // --- Limpieza al desmontar o cuando 'analyser' cambie ---
+        // --- Limpieza ---
         return () => {
-            console.log("Visualizer: Limpiando...");
+            console.log("Visualizer: Limpiando escena de Three.js...");
             window.removeEventListener('resize', handleResize);
             if (animationFrameId.current) {
-                 cancelAnimationFrame(animationFrameId.current);
+                cancelAnimationFrame(animationFrameId.current);
             }
             if (currentMount && renderer.domElement) {
                 currentMount.removeChild(renderer.domElement);
             }
-            // Limpiar geometrías, materiales, etc. para liberar memoria GPU
-            ringLineGeometries.forEach(g => g.dispose());
-            ringLineMaterials.forEach(m => m.dispose());
-            waveformGeometry.dispose();
-            waveformMaterial.dispose();
-            particlesGeometry.dispose();
-            particlesMaterial.dispose();
-            // scene.dispose(); // No es un método estándar, pero podrías querer limpiar hijos manualmente
+            // Limpieza profunda de objetos de Three.js para liberar memoria
+            scene.traverse(object => {
+                if (object.isMesh || object.isLine || object.isPoints) {
+                    if (object.geometry) object.geometry.dispose();
+                    if (object.material) {
+                        if (Array.isArray(object.material)) {
+                            object.material.forEach(material => material.dispose());
+                        } else {
+                            object.material.dispose();
+                        }
+                    }
+                }
+            });
+            renderer.dispose(); // Importante para limpiar recursos del renderer
+            console.log("Visualizer: Escena limpiada.");
         };
-    }, [analyser]); // El efecto se re-ejecuta si 'analyser' cambia
+    }, [analyser]); // Dependencia: rehacer si el analyser cambia
 
-    return <div ref={mountRef} style={{ width: '100%', height: '100vh', overflow: 'hidden' }} />;
+    // El div donde se montará el canvas de Three.js
+    return <div ref={mountRef} style={{ width: '100vw', height: '100vh', overflow: 'hidden', margin: 0, padding: 0 }} />;
 }
 
 export default Visualizer;
