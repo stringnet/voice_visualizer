@@ -32,7 +32,7 @@ function Visualizer({ analyser }) {
         // --- Datos del Analizador ---
         // Para las barras de frecuencia (anillo exterior)
         const frequencyDataArray = analyser ? new Uint8Array(analyser.frequencyBinCount) : new Uint8Array(128); // Ajusta según analyser.frequencyBinCount
-        const numFrequencyLines = 64; // Número de líneas para el anillo, puedes ajustar esto
+        const numFrequencyLines = 80; // Número de líneas para el anillo, puedes ajustar esto
         
         // Para la forma de onda (centro)
         const timeDomainDataArray = analyser ? new Uint8Array(analyser.fftSize) : new Uint8Array(2048); // fftSize suele ser 2048 por defecto
